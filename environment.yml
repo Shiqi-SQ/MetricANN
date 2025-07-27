@@ -1,0 +1,24 @@
+name: plushie_env
+channels:
+  - nvidia
+  - pytorch
+  - defaults
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/bioconda
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/msys2
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/free
+  - https://repo.anaconda.com/pkgs/r
+  - https://repo.anaconda.com/pkgs/msys2
+  - conda-forge
+dependencies:
+  - python=3.9
+  - cudatoolkit=11.8
+  - faiss-cpu
+  - hnswlib
+  - numpy
+  - pillow
+  - tqdm
+prefix: C:\Users\30562\.conda\envs\plushie_env
