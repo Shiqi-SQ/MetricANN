@@ -1,199 +1,247 @@
-# 毛绒玩偶识别器
+# MetricANN
 
-一个高度模块化、可增量、少样本的实例级图像识别系统，用于“毛绒玩偶”识别。  
-每个玩偶实例——具有独特的形状、颜色和花纹——都能在仅有 1–3 张参考图像的情况下，加入到可扩展至 10⁵–10⁶ 类的数据库中。  
-本 README 旨在帮助开发者以及大型语言模型（如 ChatGPT）快速、全面地了解、使用和扩展此项目。
+一个**模块化**、**可增量**、**少样本**的度量学习 + ANN（近似最近邻）检索框架，适用于海量类别（千级至百万级），每类仅需 1–3 张样本即可。支持动态更新，兼容 CPU、GPU 或分布式集群。
 
 ---
 
 ## 🔍 项目概览
 
-- **目标**  
-  构建一个基于 embedding 的检索系统，输入一张（或部分）玩偶照片，返回最可能的玩偶“ID”（名称）。
+MetricANN 实现了一个基于 embedding 的检索流水线：
 
-- **核心需求**  
-  1. **少样本**：每个玩偶仅需 1–3 张标注图  
-  2. **大规模**：初始类别数 ≈ 数百，扩展至 10⁵–10⁶  
-  3. **增量学习**：可动态添加新玩偶，或为已有玩偶增加新图，无需整体重训  
-  4. **鲁棒性**：支持光照变化、遮挡、局部视图（如仅识别头部）  
-  5. **跨平台**：训练时可用 GPU，推理支持 CPU/GPU（单机或集群）  
-  6. **解耦合**：各模块职责清晰——数据加载、模型、索引、检索、存储、更新、工具、分布式
+1. **度量学习**：训练共享网络（例如 ResNet 骨干 + 投射头），使用三元组或对比损失  
+2. **嵌入提取**：批量编码所有标注图像，生成固定长度向量  
+3. **ANN 索引**：用 FAISS 或 HNSW 对向量进行子线性搜索索引  
+4. **检索 CLI**：在线对查询图提取向量并检索 Top‑K 类别  
+5. **增量更新**：可在不重训/不全量重建索引的前提下添加新类别或补充样本  
+6. **分布式准备**：提供多节点推理的抽象与占位
 
 ---
 
 ## 🚀 功能与组件
 
-| 层级         | 模块                          | 职责                                          |
-| ------------ | ----------------------------- | --------------------------------------------- |
-| **配置**     | `config.py`                   | 全局常量、超参、路径                          |
-| **数据**     | `data_loader.py`              | `PlushieDataset` 与 `get_dataloader()`       |
-| **存储**     | `storage/`                    | 抽象与具体存储后端（`LocalStorage`、`DBStorage`） |
-| **模型**     | `model/`                      | `EmbeddingNet`（ResNet→ℓ₂归一化向量）+ `TripletTrainer` |
-| **提取**     | `extract.py`                  | 批量提取并保存 embedding 为 `.npy` 文件        |
-| **索引**     | `indexer/`                    | `IndexBackend` + `FaissIndex` / `HNSWIndex`  |
-| **检索**     | `search.py`                   | 加载模型 & 索引 → 查询 → 输出 Top‑K 结果      |
-| **增量**     | `incremental/updater.py`      | 加载索引 → 添加新向量 → 保存                  |
-| **分布式**   | `distributed/client.py`       | 未来 RPC 集群交互占位                         |
-| **工具**     | `utils/`                      | `logging.py`、`metrics.py`（Top‑K、mAP、MRR）  |
-| **元信息**   | `requirements.txt`, **README.md** | 依赖列表、项目说明                          |
+| 层级           | 模块                          | 职责                                    |
+| -------------- | ----------------------------- | --------------------------------------- |
+| **配置**       | `config.py`                   | 全局常量、超参数、路径                  |
+| **数据 I/O**   | `data_loader.py`              | 通用 Dataset + 自定义 collate_fn       |
+|                | `triplet_dataset.py`          | 三元组采样器（anchor/positive/negative） |
+| **模型**       | `model/embedding_model.py`    | 骨干→投射头→L2 归一化                   |
+|                | `model/trainer.py`            | TripletTrainer（含 checkpoint、早停）   |
+| **训练 CLI**   | `train.py`                    | 训练循环、tqdm 进度条、日志、早停        |
+| **提取**       | `extract.py`                  | 导出每张图的 `.npy` 嵌入向量             |
+| **索引**       | `indexer/`                    | `IndexBackend` + `FaissIndex`/`HNSWIndex` |
+| **建索引脚本** | `build_index.py`              | 扫描 embeddings、自动调优 nlist、训练 & 保存 |
+| **检索 CLI**   | `search.py`                   | 实时提取查询向量 → 搜索索引 → 输出 Top‑K |
+| **增量**       | `incremental/updater.py`      | 加载索引 → 增量添加向量 → 重新保存       |
+| **分布式**     | `distributed/client.py`       | 未来 RPC/微服务客户端占位               |
+| **工具**       | `utils/logging.py`            | 统一日志配置                            |
+|                | `utils/metrics.py`            | Top‑K 准确率、MRR 等指标                |
+| **脚本**       | `run_train.py`/`run_train.bat`| 一键启动训练封装                        |
+| **元信息**     | `requirements.txt`、`README.md` | 依赖列表、使用说明                       |
 
 ---
 
 ## 📂 目录结构
+```
+
+MetricANN/
+ ├── README.md
+ ├── requirements.txt
+ ├── config.py
+ ├── data_loader.py
+ ├── triplet_dataset.py
+ ├── train.py
+ ├── extract.py
+ ├── build_index.py
+ ├── search.py
+ ├── incremental/
+ │   └── updater.py
+ ├── distributed/
+ │   └── client.py
+ ├── indexer/
+ │   ├── backend.py
+ │   ├── faiss_index.py
+ │   └── hnsw_index.py
+ ├── model/
+ │   ├── embedding_model.py
+ │   └── trainer.py
+ ├── utils/
+ │   ├── logging.py
+ │   └── metrics.py
+ ├── run_train.py
+ └── run_train.bat
 
 ```
-plushie\_recognizer/
-├── README.md
-├── requirements.txt
-├── config.py
-├── data\_loader.py
-├── storage/
-│   ├── backend.py
-│   ├── local\_storage.py
-│   └── db\_storage.py
-├── model/
-│   ├── embedding\_model.py
-│   └── trainer.py
-├── extract.py
-├── indexer/
-│   ├── backend.py
-│   ├── faiss\_index.py
-│   └── hnsw\_index.py
-├── search.py
-├── incremental/
-│   └── updater.py
-├── distributed/
-│   └── client.py
-└── utils/
-├── logging.py
-└── metrics.py
-````
-
 ---
 
 ## ⚙️ 安装
 
+### 1. 创建 & 激活 Conda 环境
+
 ```bash
-git clone https://github.com/your-org/plushie_recognizer.git
-cd plushie_recognizer
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-````
+conda create -n metricann_env python=3.9 -y
+conda activate metricann_env
+```
 
-* **可选 GPU**：若需 GPU 加速，将 `faiss-cpu` 换成 `faiss-gpu`
-* **数据库后端**：如使用 `DBStorage`，需安装 SQLite；亦可改用其它数据库
+### 2. 安装依赖
 
----
+使用 **mamba**（速度更快）：
 
-## 🎯 快速上手
+```bash
+mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia --override-channels
+mamba install -c conda-forge faiss-cpu hnswlib pillow numpy tqdm -y
+```
 
-1. **准备数据集**
+或使用 **pip**（官方 GPU Wheel）：
 
-   ```
-   dataset/
-     plushie_001/
-       img1.jpg
-       img2.jpg
-     plushie_002/
-       head1.png
-       ...
-   ```
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install faiss-cpu hnswlib pillow numpy tqdm
+```
 
-2. **训练 embedding 模型**
+------
 
-   ```bash
-   python - <<EOF
-   from model.trainer import TripletTrainer
-   from data_loader import get_dataloader
-   import torch
+## 🗂 数据准备
 
-   device = 'cuda' if torch.cuda.is_available() else 'cpu'
-   trainer = TripletTrainer(device, margin=0.2)
-   dataloader = get_dataloader()
-   trainer.train(epochs=10, train_loader=dataloader)
-   trainer.save('model.pt')
-   EOF
-   ```
+在项目根目录下创建 `dataset/`，结构示例：
 
-3. **提取嵌入向量**
+```
+dataset/
+├── class_0001/
+│   ├── 1.jpg
+│   ├── 2.jpg
+│   └── …
+├── class_0002/
+│   └── …
+└── …
+```
 
-   ```bash
-   python extract.py --model model.pt --device cuda
-   ```
+- 每个子文件夹代表一个类别标签
+- 建议每类至少 1–3 张样本，后续可补更多提高鲁棒性
+- 可选地再拆分 `train/`、`val/` 以做早停与评估
 
-4. **构建索引**
+------
 
-   ```python
-   # build_index.py
-   from indexer.faiss_index import FaissIndex
-   import numpy as np, os
+## 🎯 训练
 
-   idx = FaissIndex(dim=512, nlist=1000, nprobe=10)
-   for label in os.listdir('embeddings'):
-       for fn in os.listdir(f'embeddings/{label}'):
-           vec = np.load(f'embeddings/{label}/{fn}')
-           idx.add(label, vec)
-   idx.build()
-   idx.save('index/main_index')
-   ```
+### （1）一键脚本
 
-5. **执行检索**
+```bash
+python run_train.py
+```
 
-   ```bash
-   python search.py --model model.pt --index index/main_index --image query.jpg --k 5
-   ```
+### （2）CLI 方式
 
-6. **增量更新**
+```bash
+python train.py \
+  --epochs 50 \
+  --batch_size 16 \
+  --num_workers 4 \
+  --device cuda \
+  --val_data dataset/val \
+  --patience 5 \
+  --ckpt_dir checkpoints \
+  --model_out final_model.pt
+```
 
-   ```bash
-   python incremental/updater.py --model model.pt --index index/main_index --new_data new_samples/ --device cpu
-   ```
+- **早停**：若验证集损失在 `--patience` 个 epoch 内无提升则停止
+- **检查点**：每个 epoch 会产出 `checkpoints/ckpt_epoch{n}.pt` 与 `best_model.pt`
+- **日志**：启动汇总、每 epoch 训练/验证损失、检查点路径
 
----
+------
 
-## 💡 项目解读指南（面向 LLM）
+## 📈 嵌入提取
 
-* **整体流程**：
+```bash
+python extract.py --model final_model.pt --device cuda
+```
 
-  1. **数据** → 按标签组织图像
-  2. **模型**：训练统一 embedding 网络
-  3. **提取**：批量计算图像向量
-  4. **索引**：将向量加载到 FAISS/HNSW，实现近似检索
-  5. **检索**：对查询图像提取向量 → 搜索索引 → 输出 Top‑K
-  6. **增量**：无需重训，直接向索引追加向量
+在 `embeddings/` 下生成：
 
-* **解耦设计**：各目录分别负责
+```
+embeddings/
+├── class_0001/001.npy
+├── class_0001/002.npy
+├── class_0002/…
+└── …
+```
 
-  * `storage/`：I/O
-  * `model/`：网络与训练
-  * `extract.py`：批量提取
-  * `indexer/`：多种检索后端
-  * `search.py`：CLI 接口
-  * `incremental/`：更新逻辑
-  * `distributed/`：分布式占位
+------
 
-* **可扩展点**：
+## 🔍 构建 ANN 索引
 
-  * 修改 `config.py` 中 `INDEX_TYPE` 为 `"hnsw"` 切换索引
-  * 新存储后端：继承 `StorageBackend`
-  * 新模型骨干：在 `config.py` 指定 `MODEL_BACKBONE`
-  * 增加或改造 CLI、集成微服务
+```bash
+python build_index.py
+```
 
----
+脚本会：
 
-## 🔄 后续规划 & 最佳实践
+1. 读取所有 `.npy` 嵌入
+2. 自动设置 `nlist = max(1, 总向量数 // 10)`
+3. 训练 FAISS 或 HNSW 索引
+4. 保存到 `index/main_index.idx` 与 `main_index.labels`
 
-* 编写单元测试，覆盖数据加载、模型、索引、检索等模块
-* 在真实数据上基准测试检索延迟与准确率
-* 调优 FAISS/HNSW 参数（`nlist`、`M`、`ef`）以平衡速度与召回
-* 实现 `distributed/client.py`，构建分布式索引服务
-* 集成监控与日志（`utils/logging.py`、`utils/metrics.py`）
-* 分析识别错误案例，持续迭代优化
+------
 
----
+## 🛠 搜索
+
+```bash
+python search.py \
+  --model final_model.pt \
+  --index index/main_index \
+  --image query.jpg \
+  --k 5 \
+  --device cuda
+```
+
+输出 Top‑K 最相似类别及距离分数。
+
+------
+
+## 🔄 增量更新
+
+有新类别或新增样本时只需：
+
+```bash
+python incremental/updater.py \
+  --model final_model.pt \
+  --index index/main_index \
+  --new_data dataset/ \
+  --device cuda
+```
+
+即可在现有索引上追加新向量，无需全量重建。
+
+------
+
+## 🌐 分布式集成
+
+- `distributed/client.py` 提供 RPC/微服务客户端占位
+- 后续可部署多台索引服务器，实现分片 & 负载均衡
+
+------
+
+## 📋 指标与监控
+
+使用 `utils/metrics.py` 计算：
+
+- **Top‑K 准确率**
+- **平均倒数排名（MRR）**
+
+结合 `utils/logging.py` 的日志可接入监控平台。
+
+------
+
+## 🔄 下一步 & 最佳实践
+
+- **超参调优**：学习率、margin、batch size、`nlist`/`nprobe`、`M`/`ef`
+- **数据增强**：提升光照/遮挡/裁剪等强鲁棒性
+- **单元测试**：覆盖数据加载、模型、索引、检索
+- **基准评测**：在真实场景下测量延迟 & 召回率
+- **分布式扩展**：实现索引分片 & RPC 服务
+- **持续在线学习**：接入标注流，自动化增量更新
+
+------
 
 ## 📄 许可证
 
-MIT © 2025 Furryfans
-欢迎用于商业或研究，并根据需要修改扩展。
+MIT © 2025 FurryFans
